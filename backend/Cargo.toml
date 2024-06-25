@@ -1,0 +1,12 @@
+[package]
+name = "conv-bin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.8.0"
+actix-multipart = "0.6.2"
+actix-cors = "0.7.0"
+icu_lib = "0.1.11"
+serde = { version = "1.0.203", features = ["derive"] }
+mime = "0.3.17"
