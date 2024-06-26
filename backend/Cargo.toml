@@ -3,6 +3,9 @@ name = "conv-bin"
 version = "0.1.0"
 edition = "2021"
 
+[profile.dev.package."*"]
+opt-level = 3
+
 [dependencies]
 actix-web = "4.8.0"
 actix-multipart = "0.6.2"

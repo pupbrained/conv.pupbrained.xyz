@@ -2,7 +2,7 @@
   <div>
     <form @submit.prevent='submitForm'>
       <div>
-        <label for='image'>Upload Image:</label>
+        <label text-2xl for='image'>Upload Image:</label>
         <input
             ref='fileInput'
             :accept='acceptedFileType'

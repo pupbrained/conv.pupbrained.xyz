@@ -2,29 +2,28 @@
   "name": "vue-example",
   "version": "1.0.0",
   "scripts": {
-    "dev": "farm start",
-    "start": "farm start",
-    "build": "farm build",
-    "preview": "farm preview",
-    "clean": "farm clean"
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "axios": "^1.7.2",
-    "farm": "^0.0.1",
+    "vite": "^5.3.1",
     "vue": "^3.4.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.5.0",
-    "@farmfe/cli": "^1.0.2",
-    "@farmfe/core": "^1.1.13",
     "@stylistic/eslint-plugin": "^2.2.2",
     "@types/bun": "latest",
+    "@unocss/postcss": "^0.61.0",
     "@vitejs/plugin-vue": "^5.0.4",
     "core-js": "^3.30.1",
     "eslint": "9.x",
     "eslint-plugin-vue": "^9.26.0",
     "globals": "^15.6.0",
+    "postcss": "^8.4.38",
     "typescript-eslint": "^7.14.1",
+    "unocss": "^0.61.0",
     "vue-eslint-parser": "^9.4.3"
   },
   "trustedDependencies": [
