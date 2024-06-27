@@ -8,7 +8,7 @@ export default [
   stylistic.configs['recommended-flat'],
   pluginJs.configs.recommended,
   ...tseslint.configs.recommended,
-  ...vue.configs['flat/essential'],
+  ...vue.configs['flat/recommended'],
   {
     files: ['**/*.{js,mjs,cjs,ts,vue}'],
     plugins: { '@stylistic': stylistic },
@@ -26,7 +26,7 @@ export default [
     },
     plugins: { vue },
     rules: {
-      'vue/html-quotes': ['error', 'single'],
+      'vue/script-indent': ['error', 2],
     },
   },
 ]

@@ -1,14 +1,8 @@
-use std::io::Read;
+use std::io::{Read, Seek};
 
 use actix_cors::Cors;
 use actix_multipart::form::{json::Json, tempfile::TempFile, MultipartForm};
-use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder, Result};
-
-use icu_lib::{
-  endecoder::{common::*, EnDecoder},
-  midata,
-  EncoderParams,
-};
+use actix_web::{post, App, Error, HttpResponse, HttpServer, Responder, Result};
 
 #[derive(Debug, MultipartForm)]
 struct UploadForm {
@@ -17,52 +11,148 @@ struct UploadForm {
   output_type: Json<String>,
 }
 
+enum Format {
+  Png,
+  Jpeg,
+  WebP,
+}
+
+struct Decoded {
+  bytes: Vec<u8>,
+  width: u32,
+  height: u32,
+}
+
+impl Format {
+  fn decode(&mut self, mut input: impl Read + Seek) -> Decoded {
+    match self {
+      Format::Png => {
+        let decoder = png::Decoder::new(&mut input);
+
+        let mut reader = decoder.read_info().expect("PNG: failed on read_info");
+
+        let mut out = vec![0; reader.output_buffer_size()];
+
+        let info = reader.next_frame(&mut out).expect("failed on next_frame");
+
+        let bytes = &out[..info.buffer_size()];
+
+        let width = reader.info().width;
+        let height = reader.info().height;
+
+        Decoded {
+          bytes: bytes.to_vec(),
+          width,
+          height,
+        }
+      }
+      Format::Jpeg => {
+        let mut decoder = jpeg_decoder::Decoder::new(&mut input);
+
+        decoder.read_info().expect("JPEG: failed on read_info");
+
+        let width = decoder.info().expect("JPEG: failed to get width").width as u32;
+        let height = decoder.info().expect("JPEG: failed to get height").height as u32;
+
+        Decoded {
+          bytes: decoder.decode().expect("JPEG: failed on decode"),
+          width,
+          height,
+        }
+      }
+      Format::WebP => {
+        let mut decoder = image_webp::WebPDecoder::new(&mut input).expect("WebP: failed on new");
+
+        let mut out = vec![
+          0;
+          decoder
+            .output_buffer_size()
+            .expect("WebP: failed to get buffer size")
+        ];
+
+        let (width, height) = decoder.dimensions();
+
+        decoder
+          .read_image(&mut out)
+          .expect("WebP: failed on read_image");
+
+        Decoded {
+          bytes: out,
+          width,
+          height,
+        }
+      }
+    }
+  }
+
+  fn encode(&mut self, input: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    match self {
+      Format::Png => {
+        let encoder = png::Encoder::new(&mut out, width, height);
+
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(input).unwrap();
+        writer.finish().unwrap();
+
+        out
+      }
+      Format::Jpeg => {
+        let encoder = jpeg_encoder::Encoder::new(&mut out, 100);
+
+        encoder
+          .encode(
+            input,
+            width.try_into().unwrap(),
+            height.try_into().unwrap(),
+            jpeg_encoder::ColorType::Rgb,
+          )
+          .unwrap();
+
+        out
+      }
+      Format::WebP => {
+        let encoder = image_webp::WebPEncoder::new(&mut out);
+
+        encoder
+          .encode(input, width, height, image_webp::ColorType::Rgba8)
+          .unwrap();
+
+        out
+      }
+    }
+  }
+}
+
+#[post("/convert_image")]
 async fn convert_image(
   MultipartForm(UploadForm {
-    file,
+    file: input,
     output_type,
   }): MultipartForm<UploadForm>,
 ) -> Result<impl Responder, Error> {
-  let mut buf = Vec::new();
-  file.file.as_file().read_to_end(&mut buf)?;
+  let file = std::io::BufReader::new(input.file.into_file());
 
-  // Determine input type
-  let input_encoder: Box<dyn EnDecoder> = match file.content_type.unwrap().subtype().as_str() {
-    "webp" => Box::new(WEBP {}),
-    "png" => Box::new(PNG {}),
-    "jpeg" => Box::new(JPEG {}),
-    "bmp" => Box::new(BMP {}),
-    "gif" => Box::new(GIF {}),
-    "tiff" => Box::new(TIFF {}),
-    "ico" => Box::new(ICO {}),
-    "pbm" => Box::new(PBM {}),
-    "pgm" => Box::new(PGM {}),
-    "ppm" => Box::new(PPM {}),
-    "pam" => Box::new(PAM {}),
-    "tga" => Box::new(TGA {}),
+  let decoded = match input.content_type.clone().unwrap().subtype().as_str() {
+    "png" => Format::Png.decode(file),
+    "webp" => Format::WebP.decode(file),
+    "jpeg" => Format::Jpeg.decode(file),
     _ => return Ok(HttpResponse::BadRequest().body("Unsupported input type")),
   };
 
-  let mid = midata::MiData::decode_from(&*input_encoder, buf);
+  let Decoded {
+    bytes,
+    width,
+    height,
+  } = decoded;
 
-  // Determine output type
-  let output_encoder: Box<dyn EnDecoder> = match output_type.to_lowercase().as_str() {
-    "bmp" => Box::new(BMP {}),
-    "gif" => Box::new(GIF {}),
-    "ico" => Box::new(ICO {}),
-    "jpeg" => Box::new(JPEG {}),
-    "pam" => Box::new(PAM {}),
-    "pbm" => Box::new(PBM {}),
-    "pgm" => Box::new(PGM {}),
-    "png" => Box::new(PNG {}),
-    "ppm" => Box::new(PPM {}),
-    "tga" => Box::new(TGA {}),
-    "tiff" => Box::new(TIFF {}),
-    "webp" => Box::new(WEBP {}),
+  let out = match input.content_type.clone().unwrap().subtype().as_str() {
+    "png" => Format::Png.encode(&bytes, width, height),
+    "jpeg" => Format::Jpeg.encode(&bytes, width, height),
+    "webp" => Format::WebP.encode(&bytes, width, height),
+
     _ => return Ok(HttpResponse::BadRequest().body("Unsupported output type")),
   };
-
-  let data = mid.encode_into(&*output_encoder, EncoderParams::default());
 
   Ok(
     HttpResponse::Ok()
@@ -78,12 +168,14 @@ async fn convert_image(
         "webp" => "image/webp",
         _ => "application/octet-stream",
       })
-      .body(data),
+      .body(out),
   )
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+  ffmpeg_next::init()?;
+
   HttpServer::new(|| {
     let cors = Cors::default()
       .allow_any_origin()
@@ -91,9 +183,7 @@ async fn main() -> std::io::Result<()> {
       .allowed_header(actix_web::http::header::CONTENT_TYPE)
       .max_age(3600);
 
-    App::new()
-      .wrap(cors)
-      .route("/convert_image", web::post().to(convert_image))
+    App::new().wrap(cors).service(convert_image)
   })
   .bind("127.0.0.1:8080")?
   .run()

@@ -32,18 +32,25 @@
       in
         with pkgs; {
           devShell = mkShell {
+            LIBCLANG_PATH = "${pkgs.llvmPackages_18.libclang.lib}/lib";
             buildInputs =
               [
                 alejandra
-                bacon
                 openssl
                 pkg-config
                 rust-bin.nightly."2024-06-25".default
+                ffmpeg
+                llvmPackages_18.clang
 
                 bun
-                nodePackages_latest.eslint
+                eslint_d
                 jq
                 nodejs_latest
+                (pkgs.writeScriptBin "dev" ''
+                  ${concurrently}/bin/concurrently \
+                    "cd `git rev-parse --show-toplevel`/frontend && bun --bun dev" \
+                    "cd `git rev-parse --show-toplevel`/backend && ${cargo-watch}/bin/cargo-watch -x 'run --color always'"
+                '')
               ]
               ++ darwinPkgs;
           };
