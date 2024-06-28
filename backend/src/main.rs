@@ -3,6 +3,7 @@ use std::io::{Read, Seek};
 use actix_cors::Cors;
 use actix_multipart::form::{json::Json, tempfile::TempFile, MultipartForm};
 use actix_web::{post, App, Error, HttpResponse, HttpServer, Responder, Result};
+use jpeg_decoder::PixelFormat;
 
 #[derive(Debug, MultipartForm)]
 struct UploadForm {
@@ -17,8 +18,18 @@ enum Format {
   WebP,
 }
 
+enum ColorType {
+  Cmyk8,
+  Grayscale16,
+  Grayscale8,
+  Indexed,
+  Rgb8,
+  Rgba8,
+}
+
 struct Decoded {
   bytes: Vec<u8>,
+  color_type: ColorType,
   width: u32,
   height: u32,
 }
@@ -39,9 +50,17 @@ impl Format {
 
         let width = reader.info().width;
         let height = reader.info().height;
+        let color_type = match reader.info().color_type {
+          png::ColorType::Grayscale => ColorType::Grayscale8,
+          png::ColorType::Rgb => ColorType::Rgb8,
+          png::ColorType::Indexed => ColorType::Indexed,
+          png::ColorType::GrayscaleAlpha => ColorType::Grayscale16,
+          png::ColorType::Rgba => ColorType::Rgba8
+        };
 
         Decoded {
           bytes: bytes.to_vec(),
+          color_type,
           width,
           height,
         }
@@ -51,11 +70,20 @@ impl Format {
 
         decoder.read_info().expect("JPEG: failed on read_info");
 
-        let width = decoder.info().expect("JPEG: failed to get width").width as u32;
-        let height = decoder.info().expect("JPEG: failed to get height").height as u32;
+        let info = decoder.info().expect("JPEG: failed to get info");
+
+        let width = info.width as u32;
+        let height = info.height as u32;
+        let color_type = match info.pixel_format {
+          PixelFormat::L8 => ColorType::Grayscale8,
+          PixelFormat::L16 => ColorType::Grayscale16,
+          PixelFormat::RGB24 => ColorType::Rgb8,
+          PixelFormat::CMYK32 => ColorType::Cmyk8,
+        };
 
         Decoded {
           bytes: decoder.decode().expect("JPEG: failed on decode"),
+          color_type,
           width,
           height,
         }
@@ -71,6 +99,10 @@ impl Format {
         ];
 
         let (width, height) = decoder.dimensions();
+        let color_type = match decoder.has_alpha() {
+          true => ColorType::Rgba8,
+          false => ColorType::Rgb8,
+        };
 
         decoder
           .read_image(&mut out)
@@ -78,6 +110,7 @@ impl Format {
 
         Decoded {
           bytes: out,
+          color_type,
           width,
           height,
         }
@@ -85,11 +118,22 @@ impl Format {
     }
   }
 
-  fn encode(&mut self, input: &[u8], width: u32, height: u32) -> Vec<u8> {
+  fn encode(&mut self, input: &[u8], width: u32, height: u32, color_type: ColorType) -> Vec<u8> {
     let mut out = Vec::new();
     match self {
       Format::Png => {
-        let encoder = png::Encoder::new(&mut out, width, height);
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+
+        let png_color_type = match color_type {
+          ColorType::Grayscale8 => png::ColorType::Grayscale,
+          ColorType::Grayscale16 => png::ColorType::GrayscaleAlpha,
+          ColorType::Rgb8 => png::ColorType::Rgb,
+          ColorType::Indexed => png::ColorType::Indexed,
+          ColorType::Rgba8 => png::ColorType::Rgba,
+          ColorType::Cmyk8 => panic!("CMYK not supported"),
+        };
+
+        encoder.set_color(png_color_type);
 
         let mut writer = encoder.write_header().unwrap();
         writer.write_image_data(input).unwrap();
@@ -100,12 +144,21 @@ impl Format {
       Format::Jpeg => {
         let encoder = jpeg_encoder::Encoder::new(&mut out, 100);
 
+        let jpeg_color_type = match color_type {
+          ColorType::Grayscale8 => jpeg_encoder::ColorType::Luma,
+          ColorType::Grayscale16 => jpeg_encoder::ColorType::Luma,
+          ColorType::Rgb8 => jpeg_encoder::ColorType::Rgb,
+          ColorType::Indexed => panic!("Indexed not supported"),
+          ColorType::Rgba8 => jpeg_encoder::ColorType::Rgba,
+          ColorType::Cmyk8 => jpeg_encoder::ColorType::Cmyk
+        };
+
         encoder
           .encode(
             input,
             width.try_into().unwrap(),
             height.try_into().unwrap(),
-            jpeg_encoder::ColorType::Rgb,
+            jpeg_color_type
           )
           .unwrap();
 
@@ -114,8 +167,16 @@ impl Format {
       Format::WebP => {
         let encoder = image_webp::WebPEncoder::new(&mut out);
 
+        let webp_color_type = match color_type {
+          ColorType::Grayscale8 => image_webp::ColorType::L8,
+          ColorType::Grayscale16 => image_webp::ColorType::La8,
+          ColorType::Rgb8 => image_webp::ColorType::Rgb8,
+          ColorType::Rgba8 => image_webp::ColorType::Rgba8,
+          _ => panic!("Unsupported color type")
+        };
+
         encoder
-          .encode(input, width, height, image_webp::ColorType::Rgba8)
+          .encode(input, width, height, webp_color_type)
           .unwrap();
 
         out
@@ -142,14 +203,15 @@ async fn convert_image(
 
   let Decoded {
     bytes,
+    color_type,
     width,
     height,
   } = decoded;
 
   let out = match input.content_type.clone().unwrap().subtype().as_str() {
-    "png" => Format::Png.encode(&bytes, width, height),
-    "jpeg" => Format::Jpeg.encode(&bytes, width, height),
-    "webp" => Format::WebP.encode(&bytes, width, height),
+    "png" => Format::Png.encode(&bytes, width, height, color_type),
+    "jpeg" => Format::Jpeg.encode(&bytes, width, height, color_type),
+    "webp" => Format::WebP.encode(&bytes, width, height, color_type),
 
     _ => return Ok(HttpResponse::BadRequest().body("Unsupported output type")),
   };
@@ -174,8 +236,6 @@ async fn convert_image(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-  ffmpeg_next::init()?;
-
   HttpServer::new(|| {
     let cors = Cors::default()
       .allow_any_origin()
