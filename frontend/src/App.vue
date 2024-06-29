@@ -10,7 +10,6 @@
         </label>
         <input
           ref="fileInput"
-          :accept="acceptedFileType"
           type="file"
           @change="handleFileUpload"
         >
@@ -18,38 +17,14 @@
       <div>
         <label for="outputFormat">Output Format:</label>
         <select v-model="outputFormat">
-          <option value="bmp">
-            BMP
-          </option>
-          <option value="gif">
-            GIF
-          </option>
-          <option value="ico">
-            ICO
-          </option>
           <option value="jpeg">
             JPEG
           </option>
-          <option value="pam">
-            PAM
-          </option>
-          <option value="pbm">
-            PBM
-          </option>
-          <option value="pgm">
-            PGM
+          <option value="jxl">
+            JPEG-XL
           </option>
           <option value="png">
             PNG
-          </option>
-          <option value="ppm">
-            PPM
-          </option>
-          <option value="tga">
-            TGA
-          </option>
-          <option value="tiff">
-            TIFF
           </option>
           <option value="webp">
             WEBP
@@ -107,7 +82,6 @@ import ky from 'ky'
 const selectedFile = ref<File | null>(null)
 const imageUrl = ref<string | null>(null)
 const outputFormat = ref<string>('png') // Default output format
-const acceptedFileType = ref<string>('image/*') // Default accepted file type
 
 const loading = ref<boolean>(false) // Loading state
 
