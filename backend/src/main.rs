@@ -1,12 +1,18 @@
-use std::io::{self, BufRead, Seek, SeekFrom};
+use std::{
+  fmt::Display,
+  io::{self, BufRead, Seek, SeekFrom},
+  panic,
+};
 
 use actix_cors::Cors;
 use actix_multipart::form::{json::Json, tempfile::TempFile, MultipartForm};
-use actix_web::{post, App, Error, HttpResponse, HttpServer, Responder, Result};
+use actix_web::{post, App, HttpResponse, HttpServer, Responder};
+use anyhow::Context;
 use jpegxl_rs::{
   decode::{Metadata, Pixels},
   encode::{EncoderResult, EncoderSpeed},
 };
+use thiserror::Error;
 
 #[derive(Debug, MultipartForm)]
 struct UploadForm {
@@ -15,11 +21,23 @@ struct UploadForm {
   output_type: Json<String>,
 }
 
+#[derive(Debug)]
 enum Format {
   Png,
   Jpeg,
   Jxl,
   WebP,
+}
+
+impl Display for Format {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Format::Png => write!(f, "PNG"),
+      Format::Jpeg => write!(f, "JPEG"),
+      Format::Jxl => write!(f, "JPEG-XL"),
+      Format::WebP => write!(f, "WebP"),
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -32,6 +50,29 @@ enum ColorType {
   YCbCr,
 }
 
+impl Display for ColorType {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      ColorType::Cmyk => write!(f, "CMYK"),
+      ColorType::Grayscale => write!(f, "Gray"),
+      ColorType::GrayscaleAlpha => write!(f, "Grayscale (w/ Alpha)"),
+      ColorType::Rgb => write!(f, "RGB"),
+      ColorType::Rgba => write!(f, "RGBA"),
+      ColorType::YCbCr => write!(f, "YCbCr"),
+    }
+  }
+}
+
+#[derive(Error, Debug)]
+enum Error {
+  #[error("Could not read info from {0} file")]
+  CouldNotReadInfo(Format),
+  // #[error("{0}: Unsupported color type {1}")]
+  // UnsupportedColorType(Format, String),
+  #[error("Could not get next frame")]
+  NextFrameNotFound,
+}
+
 struct Decoded {
   bytes: Vec<u8>,
   color_type: ColorType,
@@ -40,16 +81,20 @@ struct Decoded {
 }
 
 impl Format {
-  fn decode(&mut self, mut input: impl BufRead + Seek) -> Decoded {
+  fn decode(&mut self, mut input: impl BufRead + Seek) -> anyhow::Result<Decoded> {
     match self {
       Format::Png => {
         let decoder = png::Decoder::new(&mut input);
 
-        let mut reader = decoder.read_info().expect("PNG: failed on read_info");
+        let mut reader = decoder
+          .read_info()
+          .context(Error::CouldNotReadInfo(Format::Png))?;
 
         let mut out = vec![0; reader.output_buffer_size()];
 
-        let info = reader.next_frame(&mut out).expect("failed on next_frame");
+        let info = reader
+          .next_frame(&mut out)
+          .context(Error::NextFrameNotFound)?;
 
         let bytes = &out[..info.buffer_size()];
 
@@ -61,15 +106,16 @@ impl Format {
           png::ColorType::GrayscaleAlpha => ColorType::GrayscaleAlpha,
           png::ColorType::Rgb => ColorType::Rgb,
           png::ColorType::Rgba => ColorType::Rgba,
+
           c => panic!("PNG: unsupported color type: {:?}", c),
         };
 
-        Decoded {
+        Ok(Decoded {
           bytes: bytes.to_vec(),
           color_type,
           width,
           height,
-        }
+        })
       }
       Format::Jpeg => {
         let decoder = mozjpeg::Decompress::builder()
@@ -98,12 +144,12 @@ impl Format {
           .finish()
           .expect("Could not finish JPEG decompression");
 
-        Decoded {
+        Ok(Decoded {
           bytes,
           color_type,
           width,
           height,
-        }
+        })
       }
       Format::Jxl => {
         fn convert_bufread_to_vec<R: BufRead + Seek>(reader: &mut R) -> io::Result<Vec<u8>> {
@@ -153,12 +199,12 @@ impl Format {
           _ => panic!("JXL: unsupported pixel type"),
         };
 
-        Decoded {
+        Ok(Decoded {
           bytes,
           width,
           height,
           color_type,
-        }
+        })
       }
       Format::WebP => {
         let mut decoder = image_webp::WebPDecoder::new(&mut input).expect("WebP: failed on new");
@@ -180,12 +226,12 @@ impl Format {
           .read_image(&mut out)
           .expect("WebP: failed on read_image");
 
-        Decoded {
+        Ok(Decoded {
           bytes: out,
           color_type,
           width,
           height,
-        }
+        })
       }
     }
   }
@@ -276,7 +322,7 @@ async fn convert_image(
     file: input,
     output_type,
   }): MultipartForm<UploadForm>,
-) -> Result<impl Responder, Error> {
+) -> actix_web::Result<impl Responder, actix_web::Error> {
   let file = std::io::BufReader::new(input.file.into_file());
 
   let decoded = match input.content_type.clone().unwrap().subtype().as_str() {
@@ -293,7 +339,7 @@ async fn convert_image(
     color_type,
     width,
     height,
-  } = decoded;
+  } = decoded.unwrap();
 
   let out = match input.content_type.clone().unwrap().subtype().as_str() {
     "png" => Format::Png.encode(&bytes, width, height, color_type),
