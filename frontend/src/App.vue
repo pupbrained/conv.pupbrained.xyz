@@ -20,8 +20,8 @@
           <option value="jpeg">
             JPEG
           </option>
-          <option value="jxl">
-            JPEG-XL
+          <option value="avif">
+            AVIF
           </option>
           <option value="png">
             PNG
