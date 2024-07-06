@@ -29,11 +29,13 @@ enum Format {
 
 impl Display for Format {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Format::*;
+
         match self {
-            Format::Avif => write!(f, "AVIF"),
-            Format::Png => write!(f, "PNG"),
-            Format::Jpeg => write!(f, "JPEG"),
-            Format::WebP => write!(f, "WebP"),
+            Avif => write!(f, "AVIF"),
+            Png => write!(f, "PNG"),
+            Jpeg => write!(f, "JPEG"),
+            WebP => write!(f, "WebP"),
         }
     }
 }
@@ -70,6 +72,8 @@ impl Format {
     fn decode(&mut self, mut input: impl BufRead + Seek) -> anyhow::Result<Decoded> {
         match self {
             Format::Avif => {
+                use aom_decode::avif::Image::*;
+
                 let mut buf = Vec::new();
 
                 input
@@ -85,7 +89,7 @@ impl Format {
                 .expect("Could not read AVIF");
 
                 match decoder.convert().expect("Failed to convert") {
-                    aom_decode::avif::Image::RGB8(img) => {
+                    RGB8(img) => {
                         let (out, width, height) = img.into_contiguous_buf();
 
                         Ok(Decoded {
@@ -95,7 +99,7 @@ impl Format {
                             height: height as u32,
                         })
                     }
-                    aom_decode::avif::Image::RGBA8(img) => {
+                    RGBA8(img) => {
                         let (out, width, height) = img.into_contiguous_buf();
 
                         Ok(Decoded {
@@ -105,35 +109,7 @@ impl Format {
                             height: height as u32,
                         })
                     }
-                    aom_decode::avif::Image::RGB16(img) => {
-                        let mut out = Vec::new();
-
-                        for px in img.pixels() {
-                            out.push(px.map(|c| (c >> 8) as u8));
-                        }
-
-                        Ok(Decoded {
-                            bytes: out.iter().flat_map(|x| [x.r, x.g, x.b]).collect(),
-                            color_type: ColorType::Rgb,
-                            width: img.width() as u32,
-                            height: img.height() as u32,
-                        })
-                    }
-                    aom_decode::avif::Image::RGBA16(img) => {
-                        let mut out = Vec::new();
-
-                        for px in img.pixels() {
-                            out.push(px.map(|c| (c >> 8) as u8));
-                        }
-
-                        Ok(Decoded {
-                            bytes: out.iter().flat_map(|x| [x.r, x.g, x.b, x.a]).collect(),
-                            color_type: ColorType::Rgba,
-                            width: img.width() as u32,
-                            height: img.height() as u32,
-                        })
-                    }
-                    aom_decode::avif::Image::Gray8(img) => {
+                    Gray8(img) => {
                         let (out, width, height) = img.into_contiguous_buf();
 
                         Ok(Decoded {
@@ -143,7 +119,35 @@ impl Format {
                             height: height as u32,
                         })
                     }
-                    aom_decode::avif::Image::Gray16(img) => {
+                    RGB16(img) => {
+                        let mut out = Vec::new();
+
+                        for px in img.pixels() {
+                            out.push(px.map(|c| (c >> 8) as u8));
+                        }
+
+                        Ok(Decoded {
+                            bytes: out.iter().flat_map(|x| [x.r, x.g, x.b]).collect(),
+                            color_type: ColorType::Rgb,
+                            width: img.width() as u32,
+                            height: img.height() as u32,
+                        })
+                    }
+                    RGBA16(img) => {
+                        let mut out = Vec::new();
+
+                        for px in img.pixels() {
+                            out.push(px.map(|c| (c >> 8) as u8));
+                        }
+
+                        Ok(Decoded {
+                            bytes: out.iter().flat_map(|x| [x.r, x.g, x.b, x.a]).collect(),
+                            color_type: ColorType::Rgba,
+                            width: img.width() as u32,
+                            height: img.height() as u32,
+                        })
+                    }
+                    Gray16(img) => {
                         let mut out = Vec::new();
 
                         for px in img.pixels() {
